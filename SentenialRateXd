@@ -1,0 +1,582 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local lp = Players.LocalPlayer
+
+-- Load Mobile-Compatible Rayfield Library
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+   Name = "rater hub | Forsaken",
+   LoadingTitle = "rater hub loading",
+   LoadingSubtitle = "Made by SentenIAL",
+   ConfigurationSaving = {
+      Enabled = false,
+      FolderName = nil,
+      FileName = "RaterHub"
+   },
+   Discord = {
+      Enabled = false,
+      Invite = "noinvitelink",
+      RememberJoins = true
+   },
+   KeySystem = false
+})
+
+-- Force Parent to CoreGui for Mobile Executor Compatibility
+task.spawn(function()
+    pcall(function()
+        local rayfieldGui = CoreGui:FindFirstChild("Rayfield") or lp.PlayerGui:FindFirstChild("Rayfield")
+        if rayfieldGui then
+            rayfieldGui.Parent = CoreGui
+        end
+    end)
+end)
+
+-- Tabs
+local AutoBlockTab = Window:CreateTab("Auto Block", 4483362458)
+local TwoTimeTab   = Window:CreateTab("Two Time", 4483362458)
+local DelaysTab    = Window:CreateTab("Killer Delays", 4483362458)
+local CombatTab    = Window:CreateTab("Combat", 4483362458)
+local VisualsTab   = Window:CreateTab("Show Hitbox", 4483362458)
+local CreditsTab   = Window:CreateTab("Credits", 4483362458)
+
+-- Animation Database
+local RawAnimationIDs = {
+    "106538427162796", -- Noli M1
+    "105458270463374", -- John Doe M1
+    "126830014841198", -- Slasher M1
+    "123172382755876", -- Azure M1
+    "122709416391891", -- Nosferatu M1
+    "88451353906104",  -- Golem M1
+    "112366541922769", -- Golem Alternate
+    "18885909645",     -- Guest 666 / c00lkidd M1
+    "106776364623742", "83829782357897", "87989533095285",
+    "113423719463999", "121422839212040", "131238912830112", "118239012381290",
+    "109238192830129", "138210938219031", "114920391023912", "128492019381023"
+}
+
+local TargetAnimationIDs = {}
+local FastPriorityAnims = {}
+
+for _, id in ipairs(RawAnimationIDs) do
+    TargetAnimationIDs[id] = true
+    TargetAnimationIDs["rbxassetid://" .. id] = true
+    FastPriorityAnims[id] = true
+    FastPriorityAnims["rbxassetid://" .. id] = true
+end
+
+-- Toggle & General Settings
+local autoBlockOn = false
+local betterAutoBlockOn = false
+local facingCheckOn = false
+local facingCheckRange = 15
+local facingCheckWidth = 10
+local showHitboxOn = false
+local showVisionConeOn = false
+local showFacingConeOn = false
+local attackHitboxVisualOn = false
+
+-- Two Time Settings
+local autoBackstabOn = false
+local backstabAimbotOn = true
+local backstabAimDuration = 0.5
+local backstabMode = "Teleport" -- "Teleport" or "Lerp"
+local backstabDistance = 3
+local lerpSpeed = 0.15
+
+local autoPunchOn = false
+local punchAimbotOn = false
+local autoPunchDelay = 0.01
+local punchAimDuration = 0.4
+local aimPunchMode = "Char + Camera Lock"
+
+local autoBlockMode = "Normal"
+local autoBlockDelay = 0
+local detectionRange = 18
+local hitboxMultiplier = 1.0
+local distanceMultiplier = 1.0
+
+-- Anti Block Bait & HDT
+local antiBlockBaitRange = 6
+local hdtEnabled = false
+local hdtBaseMinSpeed = 16
+local hdtDuration = 0.35
+
+-- Individual Killer Block Delays
+local killerDelays = {
+    slasher = 0,
+    coolkidd = 0,
+    noli = 0,
+    nosferatu = 0,
+    azure = 0
+}
+
+-- Custom Hitbox Format Sizes
+local hbSize = {
+    front = 4,
+    back = 2,
+    left = 3,
+    right = 3,
+    upper = 4,
+    under = 2
+}
+
+-- Folders & State
+local KillersFolder = workspace:WaitForChild("Players"):WaitForChild("Killers")
+local activeHitboxes = {}
+local activeCones = {}
+local activeFacingCones = {}
+
+local cachedBlockBtn = nil
+local cachedPunchBtn = nil
+local blockRemote = nil
+local punchRemote = nil
+
+local function CacheRemotes()
+    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("RemoteEvent") then
+            local lname = obj.Name:lower()
+            if lname:find("block") or lname:find("parry") then
+                blockRemote = obj
+            elseif lname:find("punch") or lname:find("attack") then
+                punchRemote = obj
+            end
+        end
+    end
+end
+
+local function CacheUI()
+    local pGui = lp:FindFirstChild("PlayerGui")
+    if not pGui then return end
+    
+    local directPunch = pGui:FindFirstChild("MainUI") 
+        and pGui.MainUI:FindFirstChild("AbilityContainer") 
+        and pGui.MainUI.AbilityContainer:FindFirstChild("Punch")
+        
+    if directPunch then
+        cachedPunchBtn = directPunch
+    else
+        local mainUI = pGui:FindFirstChild("MainUI") or pGui:FindFirstChild("GameUI") or pGui:FindFirstChild("HUD")
+        if mainUI then
+            local container = mainUI:FindFirstChild("AbilityContainer") or mainUI:FindFirstChild("Abilities") or mainUI
+            cachedPunchBtn = container:FindFirstChild("Punch") or container:FindFirstChild("Attack")
+        end
+    end
+
+    local mainUI = pGui:FindFirstChild("MainUI") or pGui:FindFirstChild("GameUI") or pGui:FindFirstChild("HUD")
+    if mainUI then
+        local container = mainUI:FindFirstChild("AbilityContainer") or mainUI:FindFirstChild("Abilities") or mainUI
+        cachedBlockBtn = container:FindFirstChild("Block") or container:FindFirstChild("Parry")
+    end
+end
+
+CacheUI()
+CacheRemotes()
+
+-- Backstab Target Resolver
+local function GetClosestKillerHRP()
+    local myChar = lp.Character
+    if not myChar then return nil end
+    local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return nil end
+
+    local closestHrp = nil
+    local shortestDist = math.huge
+
+    for _, killer in ipairs(KillersFolder:GetChildren()) do
+        local kHrp = killer:FindFirstChild("HumanoidRootPart")
+        if kHrp then
+            local dist = (myHrp.Position - kHrp.Position).Magnitude
+            if dist < shortestDist then
+                shortestDist = dist
+                closestHrp = kHrp
+            end
+        end
+    end
+
+    return closestHrp
+end
+
+-- Continuous Char + Camera Lock for Backstab
+local function ContinuousBackstabLock(targetHrp, duration)
+    local myChar = lp.Character
+    if not myChar or not targetHrp then return end
+    local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return end
+
+    local startTime = os.clock()
+    local connection
+    connection = RunService.PreRender:Connect(function()
+        if os.clock() - startTime >= duration or not targetHrp.Parent or not myHrp.Parent then
+            connection:Disconnect()
+            return
+        end
+
+        local targetPos = Vector3.new(targetHrp.Position.X, myHrp.Position.Y, targetHrp.Position.Z)
+        myHrp.CFrame = CFrame.lookAt(myHrp.Position, targetPos)
+        
+        if workspace.CurrentCamera then
+            workspace.CurrentCamera.CFrame = CFrame.lookAt(workspace.CurrentCamera.CFrame.Position, targetHrp.Position)
+        end
+    end)
+end
+
+-- Backstab Execution Logic
+local function ExecuteBackstab()
+    if not autoBackstabOn then return end
+
+    local myChar = lp.Character
+    if not myChar then return end
+    local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return end
+
+    local kHrp = GetClosestKillerHRP()
+    if not kHrp then return end
+
+    local targetCFrame = kHrp.CFrame * CFrame.new(0, 0, backstabDistance)
+
+    if backstabMode == "Teleport" then
+        myHrp.CFrame = targetCFrame
+    elseif backstabMode == "Lerp" then
+        local tweenInfo = TweenInfo.new(lerpSpeed, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+        local tween = TweenService:Create(myHrp, tweenInfo, {CFrame = targetCFrame})
+        tween:Play()
+    end
+
+    if backstabAimbotOn then
+        task.spawn(ContinuousBackstabLock, kHrp, backstabAimDuration)
+    end
+end
+
+-- Connect Dagger Click Listener
+local function HookDaggerButton()
+    local pGui = lp:WaitForChild("PlayerGui", 5)
+    if not pGui then return end
+
+    local mainUI = pGui:WaitForChild("MainUI", 5)
+    if not mainUI then return end
+
+    local abilityContainer = mainUI:WaitForChild("AbilityContainer", 5)
+    if not abilityContainer then return end
+
+    local daggerBtn = abilityContainer:WaitForChild("Dagger", 5)
+    if daggerBtn then
+        if daggerBtn:IsA("GuiButton") or daggerBtn:IsA("ImageButton") then
+            daggerBtn.Activated:Connect(function()
+                ExecuteBackstab()
+            end)
+            daggerBtn.MouseButton1Click:Connect(function()
+                ExecuteBackstab()
+            end)
+        end
+    end
+end
+
+task.spawn(HookDaggerButton)
+
+lp.CharacterAdded:Connect(function()
+    task.wait(0.1)
+    CacheUI()
+    CacheRemotes()
+    task.spawn(HookDaggerButton)
+end)
+
+-- Core Trigger Mechanics
+local function InstantClickBlock()
+    local executed = false
+    if not cachedBlockBtn then CacheUI() end
+    if cachedBlockBtn then
+        if getconnections then
+            for _, conn in ipairs(getconnections(cachedBlockBtn.Activated)) do conn:Fire(); executed = true end
+            for _, conn in ipairs(getconnections(cachedBlockBtn.MouseButton1Click)) do conn:Fire(); executed = true end
+        end
+        if cachedBlockBtn:IsA("GuiButton") or cachedBlockBtn:IsA("ImageButton") then
+            pcall(function() cachedBlockBtn:Activate(); executed = true end)
+        end
+    end
+    if not executed and blockRemote then pcall(function() blockRemote:FireServer() end); executed = true end
+    if not executed then
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+    end
+end
+
+local function InstantClickPunch()
+    local executed = false
+    local pGui = lp:FindFirstChild("PlayerGui")
+    local directPunch = pGui and pGui:FindFirstChild("MainUI") 
+        and pGui.MainUI:FindFirstChild("AbilityContainer") 
+        and pGui.MainUI.AbilityContainer:FindFirstChild("Punch")
+    local punchTarget = directPunch or cachedPunchBtn
+
+    if punchTarget then
+        if getconnections then
+            for _, conn in ipairs(getconnections(punchTarget.Activated)) do conn:Fire(); executed = true end
+            for _, conn in ipairs(getconnections(punchTarget.MouseButton1Click)) do conn:Fire(); executed = true end
+        end
+        if punchTarget:IsA("GuiButton") or punchTarget:IsA("ImageButton") then
+            pcall(function() punchTarget:Activate(); executed = true end)
+        end
+    end
+    if not executed and punchRemote then pcall(function() punchRemote:FireServer() end); executed = true end
+    if not executed then
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+    end
+end
+
+local function ContinuousLockTarget(targetHrp, duration)
+    local myChar = lp.Character
+    if not myChar or not targetHrp then return end
+    local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return end
+
+    local startTime = os.clock()
+    local connection
+    connection = RunService.PreRender:Connect(function()
+        if os.clock() - startTime >= duration or not targetHrp.Parent or not myHrp.Parent then
+            connection:Disconnect()
+            return
+        end
+
+        local targetPos = Vector3.new(targetHrp.Position.X, myHrp.Position.Y, targetHrp.Position.Z)
+        if aimPunchMode == "Character" then
+            myHrp.CFrame = CFrame.lookAt(myHrp.Position, targetPos)
+        elseif aimPunchMode == "Char + Camera" or aimPunchMode == "Char + Camera Lock" then
+            myHrp.CFrame = CFrame.lookAt(myHrp.Position, targetPos)
+            if workspace.CurrentCamera then
+                workspace.CurrentCamera.CFrame = CFrame.lookAt(workspace.CurrentCamera.CFrame.Position, targetHrp.Position)
+            end
+        end
+    end)
+end
+
+local function GetSpecificKillerDelay(charName)
+    local name = charName:lower()
+    if name:find("slasher") then return killerDelays.slasher
+    elseif name:find("coolkidd") or name:find("c00lkidd") or name:find("1x") then return killerDelays.coolkidd
+    elseif name:find("noli") then return killerDelays.noli
+    elseif name:find("nosferatu") then return killerDelays.nosferatu
+    elseif name:find("azure") then return killerDelays.azure
+    end
+    return 0
+end
+
+local function ExecuteBlockFast(kHrp, isPriorityTarget, charName)
+    local specificDelay = GetSpecificKillerDelay(charName)
+    local totalDelay = autoBlockDelay + specificDelay
+
+    if totalDelay > 0 and not isPriorityTarget then
+        task.wait(totalDelay)
+    elseif specificDelay > 0 and isPriorityTarget then
+        task.wait(specificDelay)
+    end
+
+    InstantClickBlock()
+
+    if autoPunchOn then
+        if autoPunchDelay > 0 and not isPriorityTarget then
+            task.wait(autoPunchDelay)
+        end
+        if punchAimbotOn and kHrp then
+            task.spawn(ContinuousLockTarget, kHrp, punchAimDuration)
+        end
+        InstantClickPunch()
+    end
+end
+
+local function HighlightAttackHitbox(kHrp)
+    if not attackHitboxVisualOn or not kHrp then return end
+    
+    local width = hbSize.left + hbSize.right
+    local height = hbSize.upper + hbSize.under
+    local depth = hbSize.front + hbSize.back
+
+    local offsetZ = (hbSize.back - hbSize.front) / 2
+    local offsetX = (hbSize.right - hbSize.left) / 2
+    local offsetY = (hbSize.upper - hbSize.under) / 2
+
+    local attackBox = Instance.new("Part")
+    attackBox.Name = "AttackHitboxVisual"
+    attackBox.Size = Vector3.new(width, height, depth) * hitboxMultiplier
+    attackBox.CFrame = kHrp.CFrame * CFrame.new(offsetX, offsetY, offsetZ)
+    attackBox.Anchored = true
+    attackBox.CanCollide = false
+    attackBox.Material = Enum.Material.ForceField
+    attackBox.Color = Color3.fromRGB(255, 30, 30)
+    attackBox.Transparency = 0.3
+    attackBox.Parent = workspace
+
+    if hdtEnabled then
+        local duration = hdtDuration
+        local startTime = os.clock()
+        local conn
+        conn = RunService.RenderStepped:Connect(function()
+            if os.clock() - startTime >= duration or not attackBox or not attackBox.Parent then
+                conn:Disconnect()
+                if attackBox then attackBox:Destroy() end
+                return
+            end
+            local speedMultiplier = math.max(kHrp.AssemblyLinearVelocity.Magnitude / hdtBaseMinSpeed, 1)
+            attackBox.Size = (Vector3.new(width, height, depth) * hitboxMultiplier) * Vector3.new(1, 1, speedMultiplier)
+        end)
+    else
+        task.delay(0.2, function()
+            if attackBox then attackBox:Destroy() end
+        end)
+    end
+end
+
+local function CleanAnimId(rawId)
+    if not rawId then return "" end
+    return tostring(rawId):match("%d+") or ""
+end
+
+local function CheckAndTrigger(character, rawAnimId)
+    if not autoBlockOn then return end
+    
+    local cleanId = CleanAnimId(rawAnimId)
+    local rawString = tostring(rawAnimId)
+    
+    local isPriorityTarget = FastPriorityAnims[cleanId] or FastPriorityAnims[rawString]
+
+    if not isPriorityTarget and not TargetAnimationIDs[cleanId] and not TargetAnimationIDs[rawString] then 
+        return 
+    end
+
+    local kHrp = character:FindFirstChild("HumanoidRootPart")
+    local myChar = lp.Character
+    if not myChar or not kHrp then return end
+    
+    local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return end
+
+    local rawDist = (myHrp.Position - kHrp.Position).Magnitude
+
+    if rawDist < antiBlockBaitRange then
+        return
+    end
+
+    if facingCheckOn and rawDist <= facingCheckRange and not isPriorityTarget then
+        local localPos = kHrp.CFrame:PointToObjectSpace(myHrp.Position)
+        if localPos.Z > 0 or math.abs(localPos.X) > (facingCheckWidth / 2) then
+            return
+        end
+    end
+
+    local modeBonus = 0
+    if autoBlockMode == "Aggressive" then modeBonus = 8
+    elseif autoBlockMode == "Strict" then modeBonus = -2 end
+
+    local baseRange = detectionRange + modeBonus
+    if isPriorityTarget then baseRange = baseRange + 8 end
+    if betterAutoBlockOn then baseRange = baseRange + 5 end
+
+    local effectiveRange = (baseRange * hitboxMultiplier) * distanceMultiplier
+
+    if rawDist <= effectiveRange then
+        HighlightAttackHitbox(kHrp)
+        task.spawn(ExecuteBlockFast, kHrp, isPriorityTarget, character.Name)
+    end
+end
+
+local function TrackCharacter(character)
+    if not character then return end
+    local humanoid = character:WaitForChild("Humanoid", 5)
+    local animator = humanoid and humanoid:WaitForChild("Animator", 5)
+
+    if animator then
+        animator.AnimationPlayed:Connect(function(track)
+            local anim = track.Animation
+            if anim then CheckAndTrigger(character, anim.AnimationId) end
+        end)
+        
+        local processedTracks = {}
+        local connection
+        connection = RunService.Stepped:Connect(function()
+            if not character or not character.Parent then
+                connection:Disconnect()
+                return
+            end
+            if autoBlockOn then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    if track.IsPlaying and track.TimePosition < 0.5 then
+                        local anim = track.Animation
+                        if anim and not processedTracks[track] then
+                            processedTracks[track] = true
+                            CheckAndTrigger(character, anim.AnimationId)
+                            task.delay(0.08, function() processedTracks[track] = nil end)
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end
+
+-- Visual Overlay Updates
+local function updateHitbox(killer)
+    local hrp = killer:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    if showHitboxOn then
+        if not activeHitboxes[killer] then
+            local box = Instance.new("SelectionBox")
+            box.Name = "HitboxVisual"
+            box.Color3 = Color3.fromRGB(255, 0, 0)
+            box.LineThickness = 0.05
+            box.Adornee = hrp
+            box.Parent = hrp
+            activeHitboxes[killer] = box
+        end
+    elseif activeHitboxes[killer] then
+        activeHitboxes[killer]:Destroy()
+        activeHitboxes[killer] = nil
+    end
+end
+
+local function updateVisionCone(killer)
+    local hrp = killer:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    if showVisionConeOn then
+        local calcRadius = (detectionRange * hitboxMultiplier) * distanceMultiplier
+        if not activeCones[killer] then
+            local cone = Instance.new("CylinderHandleAdornment")
+            cone.Name = "VisionCone"
+            cone.Adornee = hrp
+            cone.AlwaysOnTop = true
+            cone.Transparency = 0.6
+            cone.Color3 = Color3.fromRGB(255, 30, 30)
+            cone.Height = 0.1
+            cone.Radius = calcRadius
+            cone.CFrame = CFrame.new(0, -(hrp.Size.Y / 2), 0) * CFrame.Angles(math.rad(90), 0, 0)
+            cone.Parent = hrp
+            activeCones[killer] = cone
+        else
+            activeCones[killer].Radius = calcRadius
+        end
+    elseif activeCones[killer] then
+        activeCones[killer]:Destroy()
+        activeCones[killer] = nil
+    end
+end
+
+local function updateFacingCone(killer)
+    local hrp = killer:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    if showFacingConeOn then
+        local calcLength = facingCheckRange
+        local calcWidth = facingCheckWidth
+        if not activeFacingCones[killer] then
+            local facingBox = Instance.new("BoxHandleAdornment")
+            facingBox.Name = "FacingConeVisual"
+            facingBox.AlwaysOnTop = true
+            facingBox.Transparency = 0.6
+            facingBox.Color3 = Color3.fromRGB(255, 170, 0)
+            facingBox.Size = Vector3.new(calcWidth, 0.1, ca
