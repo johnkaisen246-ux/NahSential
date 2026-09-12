@@ -1,0 +1,219 @@
+-- WindUI Latest Working Release
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+local Window = WindUI:CreateWindow({
+    Title = "Rater Hub",
+    SubTitle = "Two Time Edition",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Transparent = true,
+    Theme = "Dark",
+})
+
+-- Initialize Single Tab
+local TwoTimeTab = Window:Tab({ Title = "Two Time", Icon = "crosshair" })
+
+-- Services
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local lp = Players.LocalPlayer
+
+-- Two Time Settings
+local autoBackstabOn = true
+local backstabMode = "Teleport" -- "Teleport" or "Tween"
+local backstabDistance = 3.5
+local tweenSpeed = 0.1
+local followDuration = 0.6
+local isBackstabbing = false
+
+-- Locate Killers Folder safely
+local KillersFolder = Workspace:WaitForChild("Players"):WaitForChild("Killers")
+
+-- Find Nearest Killer Function
+local function GetNearestKiller()
+    local myChar = lp.Character
+    if not myChar then return nil end
+    local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    if not myHrp then return nil end
+
+    local nearest = nil
+    local shortestDist = math.huge
+
+    for _, killer in ipairs(KillersFolder:GetChildren()) do
+        local kHrp = killer:FindFirstChild("HumanoidRootPart")
+        local kHum = killer:FindFirstChildOfClass("Humanoid")
+        
+        -- Make sure killer is valid and alive
+        if kHrp and kHum and kHum.Health > 0 then
+            local dist = (myHrp.Position - kHrp.Position).Magnitude
+            if dist < shortestDist then
+                shortestDist = dist
+                nearest = killer
+            end
+        end
+    end
+    return nearest
+end
+
+-- Core Backstab & Aim Lock Execution
+local function ExecuteBackstab()
+    if not autoBackstabOn or isBackstabbing then return end
+    
+    local targetKiller = GetNearestKiller()
+    if not targetKiller then return end
+    
+    local kHrp = targetKiller:FindFirstChild("HumanoidRootPart")
+    local myChar = lp.Character
+    if not kHrp or not myChar then return end
+    
+    local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    local camera = Workspace.CurrentCamera
+    if not myHrp or not camera then return end
+
+    isBackstabbing = true
+
+    -- Position calculation (Directly behind the killer's LookVector)
+    local targetCFrame = kHrp.CFrame * CFrame.new(0, 0, backstabDistance)
+    local lookAtCFrame = CFrame.lookAt(targetCFrame.Position, Vector3.new(kHrp.Position.X, targetCFrame.Position.Y, kHrp.Position.Z))
+
+    -- Initial Positional Snap
+    if backstabMode == "Teleport" then
+        myHrp.CFrame = lookAtCFrame
+        camera.CFrame = CFrame.lookAt(camera.CFrame.Position, kHrp.Position)
+    elseif backstabMode == "Tween" then
+        local tweenInfo = TweenInfo.new(tweenSpeed, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+        local tween = TweenService:Create(myHrp, tweenInfo, { CFrame = lookAtCFrame })
+        tween:Play()
+    end
+
+    -- Continuous Lock & Follow Loop
+    local startTime = tick()
+    local followConnection
+    followConnection = RunService.PreRender:Connect(function()
+        if tick() - startTime > followDuration or not kHrp or not kHrp.Parent or not myHrp or not myHrp.Parent then
+            followConnection:Disconnect()
+            isBackstabbing = false
+            return
+        end
+
+        -- Keep updating position to follow killer movement
+        local currentBackCFrame = kHrp.CFrame * CFrame.new(0, 0, backstabDistance)
+        local targetLook = Vector3.new(kHrp.Position.X, myHrp.Position.Y, kHrp.Position.Z)
+        
+        myHrp.CFrame = CFrame.lookAt(currentBackCFrame.Position, targetLook)
+        camera.CFrame = CFrame.lookAt(camera.CFrame.Position, kHrp.Position)
+    end)
+end
+
+-- Direct Detection for Dagger Activation (Hooking UI & Input)
+local function HookDaggerButton()
+    local pGui = lp:WaitForChild("PlayerGui", 5)
+    if not pGui then return end
+    
+    local mainUI = pGui:WaitForChild("MainUI", 5)
+    if not mainUI then return end
+    
+    local container = mainUI:WaitForChild("AbilityContainer", 5)
+    if not container then return end
+    
+    local daggerBtn = container:WaitForChild("Dagger", 5)
+    if daggerBtn then
+        -- Method 1: UI Activation Listener
+        daggerBtn.Activated:Connect(function()
+            ExecuteBackstab()
+        end)
+        
+        -- Method 2: Direct Input Listener on UI Element
+        daggerBtn.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                ExecuteBackstab()
+            end
+        end)
+    end
+end
+
+-- Hook on startup and character respawn
+task.spawn(HookDaggerButton)
+lp.CharacterAdded:Connect(function()
+    task.defer(HookDaggerButton)
+end)
+
+-- Global Key/Touch Backup Trigger (Direct Screen Click on Dagger Area)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if not autoBackstabOn then return end
+    
+    -- Check if user clicked UI or pressed specific key
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local pGui = lp:FindFirstChild("PlayerGui")
+        local daggerBtn = pGui and pGui:FindFirstChild("MainUI", true):FindFirstChild("AbilityContainer", true):FindFirstChild("Dagger", true)
+        
+        if daggerBtn and daggerBtn.Visible then
+            local mousePos = UserInputService:GetMouseLocation()
+            local btnPos = daggerBtn.AbsolutePosition
+            local btnSize = daggerBtn.AbsoluteSize
+            
+            -- Detect if touch/click occurred inside Dagger button bounding box
+            if mousePos.X >= btnPos.X and mousePos.X <= (btnPos.X + btnSize.X) and
+               mousePos.Y >= btnPos.Y and mousePos.Y <= (btnPos.Y + btnSize.Y) then
+                ExecuteBackstab()
+            end
+        end
+    end
+end)
+
+-- UI TAB SETUP
+TwoTimeTab:Toggle({
+    Title = "Auto Backstab on Dagger",
+    Default = autoBackstabOn,
+    Callback = function(val) autoBackstabOn = val end
+})
+
+TwoTimeTab:Dropdown({
+    Title = "Backstab Mode",
+    Values = {"Teleport", "Tween"},
+    Default = backstabMode,
+    Callback = function(val) backstabMode = val end
+})
+
+TwoTimeTab:Slider({
+    Title = "Backstab Distance",
+    Min = 1,
+    Max = 8,
+    Step = 0.5,
+    Value = { Min = 1, Max = 8, Default = 3.5 },
+    Callback = function(val)
+        backstabDistance = typeof(val) == "table" and (val.Default or val.Value or 3.5) or val
+    end
+})
+
+TwoTimeTab:Slider({
+    Title = "Tween Speed",
+    Min = 0.05,
+    Max = 0.5,
+    Step = 0.05,
+    Value = { Min = 0.05, Max = 0.5, Default = 0.1 },
+    Callback = function(val)
+        tweenSpeed = typeof(val) == "table" and (val.Default or val.Value or 0.1) or val
+    end
+})
+
+TwoTimeTab:Slider({
+    Title = "Lock Follow Duration",
+    Min = 0.2,
+    Max = 2.0,
+    Step = 0.1,
+    Value = { Min = 0.2, Max = 2.0, Default = 0.6 },
+    Callback = function(val)
+        followDuration = typeof(val) == "table" and (val.Default or val.Value or 0.6) or val
+    end
+})
+
+TwoTimeTab:Button({
+    Title = "Manual Test Backstab",
+    Callback = function() 
+        ExecuteBackstab() 
+    end
+})
