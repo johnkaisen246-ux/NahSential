@@ -1,0 +1,418 @@
+-- WindUI Latest Working Release
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+local Window = WindUI:CreateWindow({
+    Title = "Rater Hub",
+    SubTitle = "WindUI Edition",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Transparent = true,
+    Theme = "Dark",
+})
+
+-- Initialize Tabs
+local AutoBlockTab = Window:Tab({ Title = "Auto Block", Icon = "shield" })
+local CombatTab    = Window:Tab({ Title = "Combat", Icon = "swords" })
+local VisualsTab   = Window:Tab({ Title = "Visuals", Icon = "eye" })
+local CreditsTab   = Window:Tab({ Title = "Credits", Icon = "info" })
+
+-- Services & Players
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local lp = Players.LocalPlayer
+
+-- Target Animation IDs
+local TargetAnimationIDs = {
+    ["rbxassetid://126830014841198"] = true,
+    ["rbxassetid://18885909645"]     = true,
+    ["rbxassetid://106776364623742"] = true,
+    ["rbxassetid://83829782357897"]  = true,
+    ["rbxassetid://123172382755876"] = true,
+    ["rbxassetid://87989533095285"]  = true,
+    ["rbxassetid://105458270463374"] = true,
+    ["rbxassetid://106538427162796"] = true,
+    ["rbxassetid://112366541922769"] = true,
+    ["rbxassetid://88451353906104"]  = true,
+}
+
+-- Settings
+local autoBlockOn = false
+local betterAutoBlockOn = false
+local facingCheckOn = false
+local showHitboxOn = false
+local showVisionConeOn = false
+local visionShape = "Circle"
+
+local autoPunchOn = false
+local punchAimbotOn = false
+local aimPunchMode = "Char + Camera Lock"
+
+local autoBlockMode = "Normal"
+local detectionRange = 18
+local hitboxMultiplier = 1.0
+local distanceMultiplier = 1.0
+
+local KillersFolder = Workspace:WaitForChild("Players"):WaitForChild("Killers")
+local activeHitboxes = {}
+local activeCones = {}
+
+-- Cached UI Elements
+local cachedBlockBtn = nil
+local cachedPunchBtn = nil
+local blockFires = {}
+
+local function RefreshButtonCache()
+    local pGui = lp:FindFirstChild("PlayerGui")
+    if not pGui then return end
+    local mainUI = pGui:FindFirstChild("MainUI")
+    if not mainUI then return end
+    local container = mainUI:FindFirstChild("AbilityContainer")
+    if not container then return end
+    
+    cachedBlockBtn = container:FindFirstChild("Block")
+    cachedPunchBtn = container:FindFirstChild("Punch")
+
+    table.clear(blockFires)
+
+    if cachedBlockBtn and getconnections then
+        for _, conn in ipairs(getconnections(cachedBlockBtn.Activated)) do table.insert(blockFires, conn) end
+        for _, conn in ipairs(getconnections(cachedBlockBtn.MouseButton1Click)) do table.insert(blockFires, conn) end
+    end
+end
+
+RefreshButtonCache()
+lp.CharacterAdded:Connect(function()
+    task.defer(RefreshButtonCache)
+end)
+
+-- Direct GUI Trigger
+local function TriggerGuiButton(btn)
+    if not btn then return end
+    if firesignal and btn:IsA("GuiButton") then
+        pcall(function() firesignal(btn.Activated) end)
+        pcall(function() firesignal(btn.MouseButton1Click) end)
+        pcall(function() firesignal(btn.MouseButton1Down) end)
+        pcall(function() firesignal(btn.MouseButton1Up) end)
+    end
+    if getconnections then
+        for _, name in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "TouchTap"}) do
+            if btn[name] then
+                for _, conn in ipairs(getconnections(btn[name])) do
+                    pcall(function() conn:Fire() end)
+                end
+            end
+        end
+    end
+    if btn:IsA("GuiButton") and btn.Activate then
+        pcall(function() btn:Activate() end)
+    end
+end
+
+local function InstantClickBlock()
+    if #blockFires > 0 then
+        for i = 1, #blockFires do blockFires[i]:Fire() end
+    elseif cachedBlockBtn then
+        TriggerGuiButton(cachedBlockBtn)
+    else
+        RefreshButtonCache()
+    end
+end
+
+local function InstantClickPunch()
+    local punchBtn = lp.PlayerGui:FindFirstChild("MainUI") 
+        and lp.PlayerGui.MainUI:FindFirstChild("AbilityContainer") 
+        and lp.PlayerGui.MainUI.AbilityContainer:FindFirstChild("Punch")
+        
+    if punchBtn then
+        TriggerGuiButton(punchBtn)
+    elseif cachedPunchBtn then
+        TriggerGuiButton(cachedPunchBtn)
+    else
+        RefreshButtonCache()
+    end
+end
+
+-- Aimbot Logic
+local function FaceTarget(targetHrp)
+    local myChar = lp.Character
+    if not myChar then return end
+    local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    local camera = Workspace.CurrentCamera
+    if not myHrp or not targetHrp then return end
+
+    local targetPos = Vector3.new(targetHrp.Position.X, myHrp.Position.Y, targetHrp.Position.Z)
+    myHrp.CFrame = CFrame.lookAt(myHrp.Position, targetPos)
+
+    if camera then
+        camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetHrp.Position)
+        if aimPunchMode == "Char + Camera Lock" then
+            local lockDuration = 0.5
+            local startTime = tick()
+            local conn
+            conn = RunService.RenderStepped:Connect(function()
+                if tick() - startTime > lockDuration or not targetHrp or not targetHrp.Parent then
+                    conn:Disconnect()
+                    return
+                end
+                camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetHrp.Position)
+                myHrp.CFrame = CFrame.lookAt(myHrp.Position, targetPos)
+            end)
+        end
+    end
+end
+
+local function ExecuteBlockFast(kHrp)
+    InstantClickBlock()
+    if autoPunchOn then
+        if punchAimbotOn and kHrp then
+            FaceTarget(kHrp)
+        end
+        InstantClickPunch()
+    end
+end
+
+local function FastProcessTrack(track, character)
+    local anim = track.Animation
+    if anim and TargetAnimationIDs[anim.AnimationId] then
+        local myChar = lp.Character
+        local kHrp = character:FindFirstChild("HumanoidRootPart")
+        if not myChar or not kHrp then return end
+        
+        local myHrp = myChar:FindFirstChild("HumanoidRootPart")
+        if not myHrp then return end
+
+        if not autoBlockOn then return end
+
+        local rawDist = (myHrp.Position - kHrp.Position).Magnitude
+
+        if facingCheckOn then
+            local toPlayer = (myHrp.Position - kHrp.Position).Unit
+            if kHrp.CFrame.LookVector:Dot(toPlayer) < 0.1 then
+                return
+            end
+        end
+
+        local modeBonus = (autoBlockMode == "Aggressive" and 8) or (autoBlockMode == "Strict" and -2) or 0
+        local baseRange = detectionRange + modeBonus
+        if betterAutoBlockOn then baseRange = baseRange + 5 end
+
+        local effectiveRange = (baseRange * hitboxMultiplier) * distanceMultiplier
+
+        if rawDist <= effectiveRange then
+            ExecuteBlockFast(kHrp)
+        end
+    end
+end
+
+local function TrackCharacter(character)
+    if not character then return end
+    local humanoid = character:WaitForChild("Humanoid", 3)
+    local animator = humanoid and humanoid:WaitForChild("Animator", 3)
+
+    if animator then
+        animator.AnimationPlayed:Connect(function(track)
+            FastProcessTrack(track, character)
+        end)
+    end
+end
+
+-- Visual Rendering
+local function updateVisionShape(killer)
+    local hrp = killer:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    if activeCones[killer] then
+        activeCones[killer]:Destroy()
+        activeCones[killer] = nil
+    end
+
+    if showVisionConeOn then
+        local calcRadius = (detectionRange * hitboxMultiplier) * distanceMultiplier
+        
+        if visionShape == "Circle" then
+            local cone = Instance.new("CylinderHandleAdornment")
+            cone.Name = "VisionCone"
+            cone.Adornee = hrp
+            cone.AlwaysOnTop = true
+            cone.Transparency = 0.5
+            cone.Color3 = Color3.fromRGB(255, 0, 0)
+            cone.Height = 0.1
+            cone.Radius = calcRadius
+            cone.CFrame = CFrame.new(0, -(hrp.Size.Y / 2), 0) * CFrame.Angles(math.rad(90), 0, 0)
+            cone.Parent = hrp
+            activeCones[killer] = cone
+        else
+            local shapePart = Instance.new("Part")
+            shapePart.Name = "VisionShape"
+            shapePart.Anchored = false
+            shapePart.CanCollide = false
+            shapePart.Material = Enum.Material.ForceField
+            shapePart.Color = Color3.fromRGB(255, 0, 0)
+            shapePart.Transparency = 0.5
+
+            if visionShape == "Square" then
+                shapePart.Size = Vector3.new(calcRadius * 2, 0.1, calcRadius * 2)
+            elseif visionShape == "Rectangle" then
+                shapePart.Size = Vector3.new(calcRadius * 1.5, 0.1, calcRadius * 3)
+            elseif visionShape == "Triangle" then
+                local mesh = Instance.new("SpecialMesh")
+                mesh.MeshType = Enum.MeshType.Wedge
+                mesh.Scale = Vector3.new(calcRadius * 2, 0.1, calcRadius * 2)
+                mesh.Parent = shapePart
+                shapePart.Size = Vector3.new(calcRadius * 2, 0.1, calcRadius * 2)
+            end
+
+            local weld = Instance.new("WeldConstraint")
+            shapePart.CFrame = hrp.CFrame * CFrame.new(0, -(hrp.Size.Y / 2), 0)
+            weld.Part0 = hrp
+            weld.Part1 = shapePart
+            weld.Parent = shapePart
+
+            shapePart.Parent = hrp
+            activeCones[killer] = shapePart
+        end
+    end
+end
+
+local function updateHitbox(killer)
+    local hrp = killer:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    if showHitboxOn then
+        if not activeHitboxes[killer] then
+            local box = Instance.new("SelectionBox")
+            box.Name = "HitboxVisual"
+            box.Color3 = Color3.fromRGB(255, 0, 0)
+            box.LineThickness = 0.05
+            box.Adornee = hrp
+            box.Parent = hrp
+            activeHitboxes[killer] = box
+        end
+    elseif activeHitboxes[killer] then
+        activeHitboxes[killer]:Destroy()
+        activeHitboxes[killer] = nil
+    end
+end
+
+-- TAB 1: AUTO BLOCK
+AutoBlockTab:Toggle({
+    Title = "Auto Block",
+    Default = autoBlockOn,
+    Callback = function(val) autoBlockOn = val end
+})
+
+AutoBlockTab:Toggle({
+    Title = "Better Auto Block",
+    Default = betterAutoBlockOn,
+    Callback = function(val) betterAutoBlockOn = val end
+})
+
+AutoBlockTab:Toggle({
+    Title = "Facing Check",
+    Default = facingCheckOn,
+    Callback = function(val) facingCheckOn = val end
+})
+
+AutoBlockTab:Dropdown({
+    Title = "Auto Block Mode",
+    Values = {"Normal", "Strict", "Aggressive"},
+    Default = autoBlockMode,
+    Callback = function(val) autoBlockMode = val end
+})
+
+AutoBlockTab:Slider({
+    Title = "Hitbox Range Multiplier",
+    Min = 1,
+    Max = 3,
+    Step = 0.1,
+    Value = { Min = 1, Max = 3, Default = 1 },
+    Callback = function(val)
+        hitboxMultiplier = typeof(val) == "table" and (val.Default or val.Value or 1) or val
+        for _, k in ipairs(KillersFolder:GetChildren()) do updateVisionShape(k) end
+    end
+})
+
+AutoBlockTab:Slider({
+    Title = "Hitbox Distance Multiplier",
+    Min = 0.5,
+    Max = 2,
+    Step = 0.1,
+    Value = { Min = 0.5, Max = 2, Default = 1 },
+    Callback = function(val)
+        distanceMultiplier = typeof(val) == "table" and (val.Default or val.Value or 1) or val
+        for _, k in ipairs(KillersFolder:GetChildren()) do updateVisionShape(k) end
+    end
+})
+
+AutoBlockTab:Input({
+    Title = "Detection Range Distance",
+    Default = tostring(detectionRange),
+    Callback = function(text)
+        detectionRange = tonumber(text) or detectionRange
+        for _, k in ipairs(KillersFolder:GetChildren()) do updateVisionShape(k) end
+    end
+})
+
+-- TAB 2: COMBAT
+CombatTab:Toggle({
+    Title = "Auto Punch After Block",
+    Default = autoPunchOn,
+    Callback = function(val) autoPunchOn = val end
+})
+
+CombatTab:Toggle({
+    Title = "Punch Aimbot",
+    Default = punchAimbotOn,
+    Callback = function(val) punchAimbotOn = val end
+})
+
+CombatTab:Dropdown({
+    Title = "Aim Punch Mode",
+    Values = {"Char + Camera Lock", "Char + Camera", "Character"},
+    Default = aimPunchMode,
+    Callback = function(val) aimPunchMode = val end
+})
+
+CombatTab:Button({
+    Title = "Manual Punch",
+    Callback = function() InstantClickPunch() end
+})
+
+-- TAB 3: VISUALS
+VisualsTab:Toggle({
+    Title = "Show Killer Hitbox",
+    Default = showHitboxOn,
+    Callback = function(val) showHitboxOn = val end
+})
+
+VisualsTab:Toggle({
+    Title = "Show Vision Range",
+    Default = showVisionConeOn,
+    Callback = function(val)
+        showVisionConeOn = val
+        for _, k in ipairs(KillersFolder:GetChildren()) do updateVisionShape(k) end
+    end
+})
+
+VisualsTab:Dropdown({
+    Title = "Vision Shape",
+    Values = {"Circle", "Square", "Rectangle", "Triangle"},
+    Default = visionShape,
+    Callback = function(val)
+        visionShape = val
+        for _, k in ipairs(KillersFolder:GetChildren()) do updateVisionShape(k) end
+    end
+})
+
+-- TAB 4: CREDITS
+CreditsTab:Button({ Title = "SentenIAL", Desc = "Coded the script", Callback = function() end })
+CreditsTab:Button({ Title = "spiderman040917", Desc = "Assisted with animation asset ids W spidey", Callback = function() end })
+
+-- Initial Listener Attachments
+for _, killer in ipairs(KillersFolder:GetChildren()) do TrackCharacter(killer) end
+KillersFolder.ChildAdded:Connect(function(killer)
+    TrackCharacter(killer)
+    updateHitbox(killer)
+    updateVisionShape(killer)
+end)
