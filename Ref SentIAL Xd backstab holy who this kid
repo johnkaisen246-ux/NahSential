@@ -1,0 +1,195 @@
+-- WindUI Latest Working Release
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+local Window = WindUI:CreateWindow({
+    Title = "Rater Hub",
+    SubTitle = "True Backstab System",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 420),
+    Transparent = true,
+    Theme = "Dark",
+})
+
+-- Initialize 2 Tabs
+local MainTab    = Window:Tab({ Title = "Auto Backstab", Icon = "swords" })
+local CreditsTab = Window:Tab({ Title = "Credits", Icon = "info" })
+
+-- Services
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local lp = Players.LocalPlayer
+
+-- Feature Settings
+local autoBackstabOn = true
+local movementMode = "Teleport" -- "Teleport", "Tween", "Lerp"
+local aimbotMode = "Char + Camera Lock" -- "Char + Camera Lock", "Character Lock", "Camera Lock"
+local backDistance = 2.2 -- Tightened offset specifically for Backstab hitbox registration
+local followDuration = 1.2 -- Seconds to maintain backstab position
+
+local KillersFolder = Workspace:WaitForChild("Players"):WaitForChild("Killers")
+
+-- Dynamic Caching
+local myChar, myHrp
+local daggerBtn
+
+local function RefreshCache()
+    myChar = lp.Character
+    if myChar then
+        myHrp = myChar:FindFirstChild("HumanoidRootPart")
+    end
+
+    local pGui = lp:FindFirstChild("PlayerGui")
+    if pGui then
+        local mainUI = pGui:FindFirstChild("MainUI")
+        if mainUI then
+            local container = mainUI:FindFirstChild("AbilityContainer")
+            if container then
+                daggerBtn = container:FindFirstChild("Dagger")
+            end
+        end
+    end
+end
+
+RefreshCache()
+lp.CharacterAdded:Connect(function()
+    task.defer(RefreshCache)
+end)
+
+-- Get Nearest Killer
+local function GetNearestKiller()
+    if not myHrp then return nil end
+    local closest, minDistance = nil, math.huge
+
+    for _, killer in ipairs(KillersFolder:GetChildren()) do
+        local kHrp = killer:FindFirstChild("HumanoidRootPart")
+        if kHrp then
+            local dist = (myHrp.Position - kHrp.Position).Magnitude
+            if dist < minDistance then
+                minDistance = dist
+                closest = killer
+            end
+        end
+    end
+    return closest, minDistance
+end
+
+-- Precision Backstab Snap & Tracking
+local function ExecuteTrueBackstab(kHrp)
+    if not myHrp or not kHrp then return end
+
+    -- Pre-calculate precise CFrame directly behind the killer, facing exact same direction
+    local killerCFrame = kHrp.CFrame
+    local backPosition = killerCFrame.Position - (killerCFrame.LookVector * backDistance)
+    local exactBackCFrame = CFrame.lookAt(backPosition, killerCFrame.Position)
+
+    -- Immediate position override before frame render
+    myHrp.CFrame = exactBackCFrame
+
+    local startTime = tick()
+    local conn
+
+    conn = RunService.RenderStepped:Connect(function()
+        if not myHrp or not kHrp or not kHrp.Parent or (tick() - startTime) > followDuration then
+            conn:Disconnect()
+            return
+        end
+
+        local currentKCFrame = kHrp.CFrame
+        local targetPos = currentKCFrame.Position - (currentKCFrame.LookVector * backDistance)
+        local targetCFrame = CFrame.lookAt(targetPos, currentKCFrame.Position)
+
+        -- Movement Enforcement
+        if movementMode == "Teleport" then
+            myHrp.CFrame = targetCFrame
+        elseif movementMode == "Tween" or movementMode == "Lerp" then
+            myHrp.CFrame = myHrp.CFrame:Lerp(targetCFrame, 0.5)
+        end
+
+        -- Direct Character & Camera Facing Lock
+        if aimbotMode == "Char + Camera Lock" or aimbotMode == "Character Lock" then
+            myHrp.CFrame = CFrame.lookAt(myHrp.Position, currentKCFrame.Position)
+        end
+
+        if aimbotMode == "Char + Camera Lock" or aimbotMode == "Camera Lock" then
+            local camera = Workspace.CurrentCamera
+            if camera then
+                camera.CFrame = CFrame.lookAt(camera.CFrame.Position, currentKCFrame.Position)
+            end
+        end
+    end)
+end
+
+-- Hook Dagger UI Button
+local function SetupDaggerHook()
+    if not daggerBtn then RefreshCache() end
+    if daggerBtn and not daggerBtn:GetAttribute("BackstabHooked") then
+        daggerBtn:SetAttribute("BackstabHooked", true)
+        
+        daggerBtn.Activated:Connect(function()
+            if not autoBackstabOn then return end
+            local killer = GetNearestKiller()
+            if killer then
+                local kHrp = killer:FindFirstChild("HumanoidRootPart")
+                if kHrp then
+                    ExecuteTrueBackstab(kHrp)
+                end
+            end
+        end)
+    end
+end
+
+-- Hook Loop
+task.spawn(function()
+    while true do
+        SetupDaggerHook()
+        task.wait(1)
+    end
+end)
+
+-- TAB 1: MAIN
+MainTab:Toggle({
+    Title = "Auto Backstab (On Dagger Press)",
+    Default = autoBackstabOn,
+    Callback = function(val) autoBackstabOn = val end
+})
+
+MainTab:Dropdown({
+    Title = "Aimbot Lock Mode",
+    Values = {"Char + Camera Lock", "Character Lock", "Camera Lock"},
+    Default = aimbotMode,
+    Callback = function(val) aimbotMode = val end
+})
+
+MainTab:Dropdown({
+    Title = "Movement Mode",
+    Values = {"Teleport", "Tween", "Lerp"},
+    Default = movementMode,
+    Callback = function(val) movementMode = val end
+})
+
+MainTab:Slider({
+    Title = "Follow Duration (Seconds)",
+    Min = 0.2,
+    Max = 3.0,
+    Step = 0.1,
+    Value = { Min = 0.2, Max = 3.0, Default = followDuration },
+    Callback = function(val)
+        followDuration = typeof(val) == "table" and (val.Default or val.Value or 1.2) or val
+    end
+})
+
+MainTab:Slider({
+    Title = "Back Off-set Distance",
+    Min = 0.5,
+    Max = 5.0,
+    Step = 0.1,
+    Value = { Min = 0.5, Max = 5.0, Default = backDistance },
+    Callback = function(val)
+        backDistance = typeof(val) == "table" and (val.Default or val.Value or 2.2) or val
+    end
+})
+
+-- TAB 2: CREDITS
+CreditsTab:Button({ Title = "SentenIAL", Desc = "Conducted the script", Callback = function() end })
+CreditsTab:Button({ Title = "Gemini", Desc = "Assisted making the script", Callback = function() end })
