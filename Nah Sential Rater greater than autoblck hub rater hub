@@ -1,4 +1,4 @@
--- [[ RATER HUB - EXACT VISUAL HITBOX OVERLAP AUTOBLOCK ]]
+https://github.com/johnkaisen246-ux/NahSential/edit/main/Nah%20Sential%20Rater%20greater%20than%20autoblck%20hub%20rater%20hub-- [[ RATER HUB - EXACT VISUAL HITBOX OVERLAP AUTOBLOCK ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
