@@ -1,0 +1,626 @@
+-- [[ RATER HUB - EXACT VISUAL HITBOX OVERLAP AUTOBLOCK ]]
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+
+local lp = Players.LocalPlayer
+local PlayerGui = lp:WaitForChild("PlayerGui")
+
+-- Folder container for visual instances
+local visualFolder = Workspace:FindFirstChild("RaterHubVisuals") or Instance.new("Folder")
+visualFolder.Name = "RaterHubVisuals"
+visualFolder.Parent = Workspace
+
+-- [[ CONFIGURATION - ALL DISABLED BY DEFAULT ]]
+local config = {
+    autoBlockOn = false,            -- OFF
+    autoBlockSoundOn = false,       -- OFF
+    circleVisualOn = false,         -- OFF
+    autoDetectionOn = false,        -- OFF
+    hitboxVisualOn = false,         -- OFF
+    hitboxDraggingOn = false,       -- OFF
+    detectionRadius = 25,
+    blockDelayMs = 0,
+    
+    hitboxFront = 10,
+    hitboxBack = 4,
+    hitboxRight = 6,
+    hitboxLeft = 6,
+    hitboxUpper = 6,
+    hitboxUnder = 4,
+
+    antiBlockBaitOn = false,        -- OFF
+    antiBlockBaitRange = 16,
+    antiBlockBaitMinSpeed = 1,
+
+    dragTechDuration = 0.35,
+
+    killerDelays = {
+        ["Slasher"] = 0,
+        ["JohnDoe"] = 0,
+        ["c00lkidd"] = -100,
+        ["1x1x1x1"] = 0,
+        ["Guest 666"] = 0,
+        ["Noli"] = 0,
+        ["Nosferatu"] = 0,
+        ["Azure"] = 0
+    }
+}
+
+local visualElements = {}
+local hitboxElements = {}
+local activeTrackDebounce = {}
+
+local attackSoundIds = {
+    ["rbxassetid://133709029886490"] = true, ["rbxassetid://82843272472677"]  = true,
+    ["rbxassetid://87823816203374"]  = true, ["rbxassetid://140569956616627"] = true,
+    ["rbxassetid://130896140725074"] = true, ["rbxassetid://136716407928459"] = true,
+    ["rbxassetid://112809109188560"] = true, ["rbxassetid://101633163910404"] = true,
+    ["rbxassetid://80516583309685"]  = true, ["rbxassetid://111261564982886"] = true,
+    ["rbxassetid://104910828105172"] = true, ["rbxassetid://110126546193799"] = true,
+    ["rbxassetid://119583605486352"] = true, ["rbxassetid://79980897195554"]  = true,
+    ["rbxassetid://109348678063422"] = true, ["rbxassetid://136406635725343"] = true,
+    ["rbxassetid://140242176732868"] = true, ["rbxassetid://90819435118493"]  = true,
+    ["rbxassetid://117173212095661"] = true, ["rbxassetid://100321250424257"] = true,
+}
+
+local killerM1AnimIds = {
+    ["18885909645"]     = true, -- c00lkidd M1 Target ID
+    ["123172382755876"] = true, ["112366541922769"] = true, ["126830014841198"] = true,
+    ["88451353906104"]  = true, ["91628732643385"]  = true, ["122709416391891"] = true, 
+    ["87989533095285"]  = true, ["106538427162796"] = true, ["105458270463374"] = true, 
+    ["83829782357897"]  = true, ["135328222920251"] = true, ["108151239820542"] = true, 
+    ["118129849201948"] = true, ["114002847592810"] = true,
+}
+
+-- [[ UI FAST BLOCK TRIGGER ENGINE ]]
+local cachedBlockBtn = nil
+
+local function getBlockButton()
+    if cachedBlockBtn and cachedBlockBtn.Parent then return cachedBlockBtn end
+    local mainUI = PlayerGui:FindFirstChild("MainUI")
+    if not mainUI then return nil end
+
+    local abilityContainer = mainUI:FindFirstChild("AbilityContainer") or mainUI:FindFirstChild("AbilityContainer", true)
+    if not abilityContainer then return nil end
+
+    cachedBlockBtn = abilityContainer:FindFirstChild("Block")
+    return cachedBlockBtn
+end
+
+local function triggerBlockUI()
+    local blockBtn = getBlockButton()
+    if not blockBtn then return end
+
+    if getconnections then
+        for _, connection in ipairs(getconnections(blockBtn.Activated)) do connection:Fire() end
+        for _, connection in ipairs(getconnections(blockBtn.MouseButton1Click)) do connection:Fire() end
+        for _, connection in ipairs(getconnections(blockBtn.MouseButton1Down)) do connection:Fire() end
+    end
+end
+
+local lastTriggerTime = 0
+local function executeInstantBlock(killerModel)
+    local now = os.clock()
+    if (now - lastTriggerTime) < 0.25 then return end
+    lastTriggerTime = now
+
+    local myHrp = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+    local kHrp = killerModel and killerModel:FindFirstChild("HumanoidRootPart")
+
+    if myHrp and kHrp then
+        myHrp.CFrame = CFrame.lookAt(myHrp.Position, Vector3.new(kHrp.Position.X, myHrp.Position.Y, kHrp.Position.Z))
+    end
+
+    triggerBlockUI()
+end
+
+-- [[ DIRECT PART OVERLAP CHECK ]]
+local function isTouchingHitboxPart(killerModel)
+    local data = hitboxElements[killerModel]
+    if not data or not data.Part then return false end
+
+    local char = lp.Character
+    if not char then return false end
+
+    local overlapParams = OverlapParams.new()
+    overlapParams.FilterType = Enum.RaycastFilterType.Include
+    overlapParams.FilterDescendantsInstances = {char}
+
+    local partsInBox = Workspace:GetPartsInPart(data.Part, overlapParams)
+    return #partsInBox > 0
+end
+
+-- [[ INTERFACE SETUP ]]
+if PlayerGui:FindFirstChild("RaterHub_Clean") then
+    PlayerGui.RaterHub_Clean:Destroy()
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "RaterHub_Clean"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.Parent = PlayerGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 600, 0, 360)
+MainFrame.Position = UDim2.new(0.5, -300, 0.5, -180)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 16)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 8)
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(35, 35, 38)
+MainStroke.Thickness = 1
+MainStroke.Parent = MainFrame
+
+local SideBar = Instance.new("Frame")
+SideBar.Size = UDim2.new(0, 150, 1, 0)
+SideBar.BackgroundColor3 = Color3.fromRGB(18, 18, 20)
+SideBar.BorderSizePixel = 0
+SideBar.Parent = MainFrame
+
+Instance.new("UICorner", SideBar).CornerRadius = UDim.new(0, 8)
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -20, 0, 45)
+TitleLabel.Position = UDim2.new(0, 15, 0, 0)
+TitleLabel.Text = "Rater Hub"
+TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 14
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Parent = SideBar
+
+local TabContainer = Instance.new("Frame")
+TabContainer.Size = UDim2.new(1, 0, 1, -45)
+TabContainer.Position = UDim2.new(0, 0, 0, 45)
+TabContainer.BackgroundTransparency = 1
+TabContainer.Parent = SideBar
+
+local TabList = Instance.new("UIListLayout")
+TabList.Padding = UDim.new(0, 4)
+TabList.SortOrder = Enum.SortOrder.LayoutOrder
+TabList.Parent = TabContainer
+
+local ContentArea = Instance.new("Frame")
+ContentArea.Size = UDim2.new(1, -150, 1, 0)
+ContentArea.Position = UDim2.new(0, 150, 0, 0)
+ContentArea.BackgroundTransparency = 1
+ContentArea.Parent = MainFrame
+
+local tabs = {}
+local activeTab = nil
+
+local function CreateTab(name)
+    local TabBtn = Instance.new("TextButton")
+    TabBtn.Size = UDim2.new(1, -16, 0, 32)
+    TabBtn.Position = UDim2.new(0, 8, 0, 0)
+    TabBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 28)
+    TabBtn.BackgroundTransparency = 1
+    TabBtn.Text = "    " .. name
+    TabBtn.TextColor3 = Color3.fromRGB(150, 150, 155)
+    TabBtn.Font = Enum.Font.GothamMedium
+    TabBtn.TextSize = 12
+    TabBtn.TextXAlignment = Enum.TextXAlignment.Left
+    TabBtn.Parent = TabContainer
+
+    Instance.new("UICorner", TabBtn).CornerRadius = UDim.new(0, 6)
+
+    local Page = Instance.new("ScrollingFrame")
+    Page.Size = UDim2.new(1, -24, 1, -24)
+    Page.Position = UDim2.new(0, 12, 0, 12)
+    Page.BackgroundTransparency = 1
+    Page.BorderSizePixel = 0
+    Page.ScrollBarThickness = 2
+    Page.ScrollBarImageColor3 = Color3.fromRGB(50, 50, 55)
+    Page.Visible = false
+    Page.Parent = ContentArea
+
+    local PageList = Instance.new("UIListLayout")
+    PageList.Padding = UDim.new(0, 10)
+    PageList.SortOrder = Enum.SortOrder.LayoutOrder
+    PageList.Parent = Page
+
+    TabBtn.MouseButton1Click:Connect(function()
+        if activeTab == name then return end
+        activeTab = name
+
+        for tName, t in pairs(tabs) do
+            t.Btn.BackgroundTransparency = 1
+            t.Btn.TextColor3 = Color3.fromRGB(150, 150, 155)
+            t.Page.Visible = false
+        end
+
+        TabBtn.BackgroundTransparency = 0
+        TabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Page.Visible = true
+    end)
+
+    tabs[name] = {Btn = TabBtn, Page = Page}
+
+    if not activeTab then
+        activeTab = name
+        TabBtn.BackgroundTransparency = 0
+        TabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Page.Visible = true
+    end
+
+    return Page
+end
+
+local function CreateCardGroup(page, titleText)
+    local Card = Instance.new("Frame")
+    Card.Size = UDim2.new(1, 0, 0, 30)
+    Card.BackgroundColor3 = Color3.fromRGB(20, 20, 22)
+    Card.Parent = page
+
+    Instance.new("UICorner", Card).CornerRadius = UDim.new(0, 6)
+    local CardStroke = Instance.new("UIStroke")
+    CardStroke.Color = Color3.fromRGB(32, 32, 36)
+    CardStroke.Parent = Card
+
+    local Header = Instance.new("TextLabel")
+    Header.Size = UDim2.new(1, -20, 0, 26)
+    Header.Position = UDim2.new(0, 10, 0, 2)
+    Header.Text = titleText
+    Header.TextColor3 = Color3.fromRGB(200, 200, 205)
+    Header.Font = Enum.Font.GothamBold
+    Header.TextSize = 11
+    Header.TextXAlignment = Enum.TextXAlignment.Left
+    Header.BackgroundTransparency = 1
+    Header.Parent = Card
+
+    local Container = Instance.new("Frame")
+    Container.Size = UDim2.new(1, -16, 1, -28)
+    Container.Position = UDim2.new(0, 8, 0, 26)
+    Container.BackgroundTransparency = 1
+    Container.Parent = Card
+
+    local List = Instance.new("UIListLayout")
+    List.Padding = UDim.new(0, 6)
+    List.SortOrder = Enum.SortOrder.LayoutOrder
+    List.Parent = Container
+
+    List:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        Card.Size = UDim2.new(1, 0, 0, List.AbsoluteContentSize.Y + 34)
+    end)
+
+    return Container
+end
+
+local function AddToggle(container, name, defaultState, callback)
+    local Item = Instance.new("Frame")
+    Item.Size = UDim2.new(1, 0, 0, 24)
+    Item.BackgroundTransparency = 1
+    Item.Parent = container
+
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, -40, 1, 0)
+    Label.Text = name
+    Label.TextColor3 = Color3.fromRGB(160, 160, 165)
+    Label.Font = Enum.Font.Gotham
+    Label.TextSize = 11
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+    Label.BackgroundTransparency = 1
+    Label.Parent = Item
+
+    local Switch = Instance.new("TextButton")
+    Switch.Size = UDim2.new(0, 30, 0, 16)
+    Switch.Position = UDim2.new(1, -30, 0.5, -8)
+    Switch.BackgroundColor3 = defaultState and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(35, 35, 40)
+    Switch.Text = ""
+    Switch.Parent = Item
+
+    Instance.new("UICorner", Switch).CornerRadius = UDim.new(1, 0)
+
+    local Dot = Instance.new("Frame")
+    Dot.Size = UDim2.new(0, 12, 0, 12)
+    Dot.Position = defaultState and UDim2.new(1, -14, 0.5, -6) or UDim2.new(0, 2, 0.5, -6)
+    Dot.BackgroundColor3 = defaultState and Color3.fromRGB(15, 15, 16) or Color3.fromRGB(120, 120, 125)
+    Dot.Parent = Switch
+
+    Instance.new("UICorner", Dot).CornerRadius = UDim.new(1, 0)
+
+    local state = defaultState
+    Switch.MouseButton1Click:Connect(function()
+        state = not state
+        TweenService:Create(Switch, TweenInfo.new(0.15), {BackgroundColor3 = state and Color3.fromRGB(230, 230, 230) or Color3.fromRGB(35, 35, 40)}):Play()
+        TweenService:Create(Dot, TweenInfo.new(0.15), {
+            Position = state and UDim2.new(1, -14, 0.5, -6) or UDim2.new(0, 2, 0.5, -6),
+            BackgroundColor3 = state and Color3.fromRGB(15, 15, 16) or Color3.fromRGB(120, 120, 125)
+        }):Play()
+        callback(state)
+    end)
+end
+
+local function AddSlider(container, name, min, max, default, callback)
+    local Item = Instance.new("Frame")
+    Item.Size = UDim2.new(1, 0, 0, 36)
+    Item.BackgroundTransparency = 1
+    Item.Parent = container
+
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, -50, 0, 16)
+    Label.Text = name
+    Label.TextColor3 = Color3.fromRGB(160, 160, 165)
+    Label.Font = Enum.Font.Gotham
+    Label.TextSize = 11
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+    Label.BackgroundTransparency = 1
+    Label.Parent = Item
+
+    local ValLabel = Instance.new("TextLabel")
+    ValLabel.Size = UDim2.new(0, 45, 0, 16)
+    ValLabel.Position = UDim2.new(1, -45, 0, 0)
+    ValLabel.Text = tostring(default)
+    ValLabel.TextColor3 = Color3.fromRGB(200, 200, 205)
+    ValLabel.Font = Enum.Font.Gotham
+    ValLabel.TextSize = 11
+    ValLabel.TextXAlignment = Enum.TextXAlignment.Right
+    ValLabel.BackgroundTransparency = 1
+    ValLabel.Parent = Item
+
+    local Track = Instance.new("TextButton")
+    Track.Size = UDim2.new(1, 0, 0, 4)
+    Track.Position = UDim2.new(0, 0, 0, 22)
+    Track.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+    Track.Text = ""
+    Track.Parent = Item
+
+    Instance.new("UICorner", Track).CornerRadius = UDim.new(1, 0)
+
+    local Fill = Instance.new("Frame")
+    Fill.Size = UDim2.new(math.clamp((default - min)/(max - min), 0, 1), 0, 1, 0)
+    Fill.BackgroundColor3 = Color3.fromRGB(220, 220, 225)
+    Fill.BorderSizePixel = 0
+    Fill.Parent = Track
+
+    Instance.new("UICorner", Fill).CornerRadius = UDim.new(1, 0)
+
+    local dragging = false
+    local function update(input)
+        local pos = math.clamp((input.Position.X - Track.AbsolutePosition.X) / Track.AbsoluteSize.X, 0, 1)
+        local val = math.floor(min + (max - min) * pos)
+        Fill.Size = UDim2.new(pos, 0, 1, 0)
+        ValLabel.Text = tostring(val)
+        callback(val)
+    end
+
+    Track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            update(input)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            update(input)
+        end
+    end)
+end
+
+local function AddButton(container, text, callback)
+    local Btn = Instance.new("TextButton")
+    Btn.Size = UDim2.new(1, 0, 0, 26)
+    Btn.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
+    Btn.Text = text
+    Btn.TextColor3 = Color3.fromRGB(220, 220, 225)
+    Btn.Font = Enum.Font.Gotham
+    Btn.TextSize = 11
+    Btn.Parent = container
+
+    Instance.new("UICorner", Btn).CornerRadius = UDim.new(0, 4)
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Color = Color3.fromRGB(40, 40, 45)
+    Stroke.Parent = Btn
+
+    Btn.MouseButton1Click:Connect(callback)
+end
+
+-- [[ TABS & INTERFACE BUILD ]]
+local CombatPage = CreateTab("Combat")
+local HitboxPage = CreateTab("Hitbox")
+local AntiBaitPage = CreateTab("Anti-Bait")
+local DelaysPage = CreateTab("Delays")
+local ConfigPage = CreateTab("Config")
+
+local AutoBlockGroup = CreateCardGroup(CombatPage, "Auto Block Options")
+AddToggle(AutoBlockGroup, "Auto Block Active", config.autoBlockOn, function(v) config.autoBlockOn = v end)
+AddToggle(AutoBlockGroup, "Sound Detection Fallback", config.autoBlockSoundOn, function(v) config.autoBlockSoundOn = v end)
+AddToggle(AutoBlockGroup, "Auto Detection Preset", config.autoDetectionOn, function(v) config.autoDetectionOn = v end)
+
+local VisualsGroup = CreateCardGroup(CombatPage, "Visual Indicators")
+AddToggle(VisualsGroup, "Killer Ground Red Circle", config.circleVisualOn, function(v)
+    config.circleVisualOn = v
+    if not v then
+        for k in pairs(visualElements) do
+            if visualElements[k].Part then visualElements[k].Part:Destroy() end
+            visualElements[k] = nil
+        end
+    end
+end)
+AddToggle(VisualsGroup, "Hitbox Visualization", config.hitboxVisualOn, function(v)
+    config.hitboxVisualOn = v
+    if not v then
+        for k in pairs(hitboxElements) do
+            if hitboxElements[k].Part then hitboxElements[k].Part:Destroy() end
+            hitboxElements[k] = nil
+        end
+    end
+end)
+
+local DragGroup = CreateCardGroup(CombatPage, "Drag Tech")
+AddToggle(DragGroup, "Hitbox Drag Tech", config.hitboxDraggingOn, function(v) config.hitboxDraggingOn = v end)
+AddSlider(DragGroup, "Drag Duration (ms)", 100, 1000, math.floor(config.dragTechDuration * 1000), function(v) config.dragTechDuration = v / 1000 end)
+
+local HitboxGroup = CreateCardGroup(HitboxPage, "Hitbox Expander Dimensions")
+AddSlider(HitboxGroup, "Front Size", 1, 30, config.hitboxFront, function(v) config.hitboxFront = v end)
+AddSlider(HitboxGroup, "Back Size", 1, 30, config.hitboxBack, function(v) config.hitboxBack = v end)
+AddSlider(HitboxGroup, "Right Size", 1, 30, config.hitboxRight, function(v) config.hitboxRight = v end)
+AddSlider(HitboxGroup, "Left Size", 1, 30, config.hitboxLeft, function(v) config.hitboxLeft = v end)
+AddSlider(HitboxGroup, "Upper Size", 1, 30, config.hitboxUpper, function(v) config.hitboxUpper = v end)
+AddSlider(HitboxGroup, "Under Size", 1, 30, config.hitboxUnder, function(v) config.hitboxUnder = v end)
+
+local AntiBaitGroup = CreateCardGroup(AntiBaitPage, "Bait Checks")
+AddToggle(AntiBaitGroup, "Enable Anti-Block Bait", config.antiBlockBaitOn, function(v) config.antiBlockBaitOn = v end)
+AddSlider(AntiBaitGroup, "Bait Check Range", 1, 25, config.antiBlockBaitRange, function(v) config.antiBlockBaitRange = v end)
+AddSlider(AntiBaitGroup, "Min Speed Threshold", 1, 20, config.antiBlockBaitMinSpeed, function(v) config.antiBlockBaitMinSpeed = v end)
+
+local DelaysGroup = CreateCardGroup(DelaysPage, "Individual Killer Delays (ms)")
+for killerName in pairs(config.killerDelays) do
+    AddSlider(DelaysGroup, killerName, -100, 500, config.killerDelays[killerName], function(v)
+        config.killerDelays[killerName] = v
+    end)
+end
+
+local ConfigGroup = CreateCardGroup(ConfigPage, "Configuration File")
+AddButton(ConfigGroup, "Save Config File", function()
+    if writefile then writefile("rater_config.json", HttpService:JSONEncode(config)) end
+end)
+AddButton(ConfigGroup, "Load Config File", function()
+    if readfile and isfile and isfile("rater_config.json") then
+        local loaded = HttpService:JSONDecode(readfile("rater_config.json"))
+        for k, v in pairs(loaded) do config[k] = v end
+    end
+end)
+
+-- [[ DUAL SCANNER & RENDER ENGINE ]]
+RunService.RenderStepped:Connect(function()
+    local playersFolder = Workspace:FindFirstChild("Players")
+    local killersFolder = playersFolder and playersFolder:FindFirstChild("Killers")
+    if not killersFolder then return end
+
+    for _, killer in ipairs(killersFolder:GetChildren()) do
+        if killer:IsA("Model") then
+            local hrp = killer:FindFirstChild("HumanoidRootPart")
+            local humanoid = killer:FindFirstChildOfClass("Humanoid")
+            local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+
+            -- Always update hitbox position so overlap checks work continuously
+            if hrp then
+                if not hitboxElements[killer] then
+                    local boxPart = Instance.new("Part")
+                    boxPart.Name = "CustomKillerHitbox"
+                    boxPart.Material = Enum.Material.Neon
+                    boxPart.Color = Color3.fromRGB(255, 30, 30)
+                    boxPart.Transparency = config.hitboxVisualOn and 0.6 or 1
+                    boxPart.CanCollide = falseboxPart.CanQuery = false
+                    boxPart.CanTouch = false
+                    boxPart.Anchored = true
+                    boxPart.CastShadow = false
+                    boxPart.Parent = visualFolder
+
+                    local selectionBox = Instance.new("SelectionBox")
+                    selectionBox.Color3 = Color3.fromRGB(255, 0, 0)
+                    selectionBox.LineThickness = 0.05
+                    selectionBox.Adornee = boxPart
+                    selectionBox.Visible = config.hitboxVisualOn
+                    selectionBox.Parent = boxPart
+
+                    hitboxElements[killer] = {Part = boxPart, Selection = selectionBox}
+                else
+                    local data = hitboxElements[killer]
+                    local totalWidth = config.hitboxLeft + config.hitboxRight
+                    local totalHeight = config.hitboxUpper + config.hitboxUnder
+                    local totalLength = config.hitboxFront + config.hitboxBack
+
+                    local offsetX = (config.hitboxRight - config.hitboxLeft) / 2
+                    local offsetY = (config.hitboxUpper - config.hitboxUnder) / 2
+                    local offsetZ = (config.hitboxBack - config.hitboxFront) / 2
+
+                    data.Part.Transparency = config.hitboxVisualOn and 0.6 or 1
+                    data.Selection.Visible = config.hitboxVisualOn
+                    data.Part.Size = Vector3.new(totalWidth, totalHeight, totalLength)
+                    data.Part.CFrame = hrp.CFrame * CFrame.new(offsetX, offsetY, offsetZ)
+                end
+            end
+
+            -- Ground Red Circle Render
+            if config.circleVisualOn and hrp then
+                if not visualElements[killer] then
+                    local circle = Instance.new("Part")
+                    circle.Name = "KillerRedCircle"
+                    circle.Shape = Enum.PartType.Cylinder
+                    circle.Material = Enum.Material.Neon
+                    circle.Color = Color3.fromRGB(255, 30, 30)
+                    circle.Transparency = 0.5
+                    circle.Size = Vector3.new(0.2, config.detectionRadius * 2, config.detectionRadius * 2)
+                    circle.CanCollide = false
+                    circle.CanQuery = false
+                    circle.CanTouch = false
+                    circle.Anchored = true
+                    circle.CastShadow = false
+                    circle.Parent = visualFolder
+
+                    visualElements[killer] = {Part = circle}
+                else
+                    local part = visualElements[killer].Part
+                    part.Size = Vector3.new(0.2, config.detectionRadius * 2, config.detectionRadius * 2)
+
+                    local ray = Ray.new(hrp.Position, Vector3.new(0, -15, 0))
+                    local hit, hitPos = Workspace:FindPartOnRayWithIgnoreList(ray, {killer, visualFolder})
+                    local groundPos = hitPos or (hrp.Position - Vector3.new(0, 3, 0))
+
+                    part.CFrame = CFrame.new(groundPos) * CFrame.Angles(0, 0, math.rad(90))
+                end
+            end
+
+            -- Overlap-Filtered Animation Detection Engine
+            if config.autoBlockOn and animator and hrp then
+                if isTouchingHitboxPart(killer) then
+                    local tracks = animator:GetPlayingAnimationTracks()
+                    for i = 1, #tracks do
+                        local track = tracks[i]
+                        local anim = track.Animation
+                        local animId = anim and anim.AnimationId
+                        
+                        if animId then
+                            local rawId = animId:match("%d+")
+                            if rawId and killerM1AnimIds[rawId] then
+                                local now = os.clock()
+                                if not activeTrackDebounce[rawId] or (now - activeTrackDebounce[rawId]) > 0.3 then
+                                    activeTrackDebounce[rawId] = now
+                                    executeInstantBlock(killer)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- [[ SOUND DETECTOR BACKUP ]]
+local function attachSoundHook(sound)
+    if not sound:IsA("Sound") then return end
+    sound.Played:Connect(function()
+        if config.autoBlockSoundOn and attackSoundIds[sound.SoundId] then
+            local killerModel = sound:FindFirstAncestorOfClass("Model")
+            if killerModel and isTouchingHitboxPart(killerModel) then
+                executeInstantBlock(killerModel)
+            end
+        end
+    end)
+end
+
+for _, desc in ipairs(Workspace:GetDescendants()) do attachSoundHook(desc) end
+Workspace.DescendantAdded:Connect(attachSoundHook)
